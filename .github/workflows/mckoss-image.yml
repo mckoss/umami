@@ -1,0 +1,66 @@
+# mckoss fork: builds Umami's own Dockerfile from the `mckoss` branch (a
+# release plus fixes not yet merged upstream) and publishes it to
+# ghcr.io/mckoss/umami, tagged with package.json's version (e.g. 3.4.1-mk.1).
+# stats.mckoss.com (repo mckoss/umami-analytics) builds FROM that tag.
+name: mckoss image
+
+on:
+  push:
+    branches: [mckoss]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    if: github.repository == 'mckoss/umami'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Unit tests
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build:packages
+          pnpm test
+
+      - name: Image version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if docker manifest inspect "ghcr.io/mckoss/umami:$version" >/dev/null 2>&1; then
+            echo "::error::ghcr.io/mckoss/umami:$version already exists; raise the version in package.json."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/mckoss/umami:${{ steps.version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
